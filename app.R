@@ -86,15 +86,25 @@ which.nonnum <- function(x) {
 }
 
 
-
-
+# function returns TRUE for any blank values
+is.blank <- function(x, false.triggers=FALSE){
+  if(is.function(x)) return(FALSE) # Some of the tests below trigger
+  # warnings when used on functions
+  return(
+    is.null(x) ||                # Actually this line is unnecessary since
+      length(x) == 0 ||            # length(NULL) = 0, but I like to be clear
+      all(is.na(x)) ||
+      all(x=="") ||
+      (false.triggers && all(!x))
+  )
+}
 
 
 ui <- fluidPage(
   
 
   # Application title
-  titlePanel(h3("Data Import")),
+  titlePanel(h4("Data Import")),
 
   # Sidebar with a slider input for number of bins
   sidebarLayout(
@@ -120,39 +130,30 @@ ui <- fluidPage(
       tabsetPanel(
         id = 'tabs',
 
-        #----------------------------- TCF tab -----------------------
+        #----------------------------- Combined tab -----------------------
         
-        tabPanel("TCF",
+        tabPanel("Controller vs VNA",
                  br(),
                 
                  fluidRow(width=14,
                           DT::dataTableOutput("contr_table"),
-                          br(),
-                          column(width=12,  plotlyOutput("plot_tcf", height = 300  ) ),
                           br(), 
-
-                          column(width=12,  plotlyOutput("plot_power", height = 300  )                                 
-                          )
-
-
-                     )
-        ),
-
-        #----------------------------- VNA tab -----------------------
-
-        tabPanel("VNA",
-                 
-                 br(),
-                 fluidRow(width=12,         
-                          DT::dataTableOutput("chip_table"),
-                          br(),
-                          column(width=12,  plotlyOutput("plot_chip",  height = 400  )
-                          )               
-                 
-                 
-            )
+                          DT::dataTableOutput("vna_table")
+                ),
+                br(), 
+                textOutput('warning_text'),
+                #verbatimTextOutput('warning_text'),
+                br(), 
+                plotlyOutput("plot_freq", height = 400  ),
+                br(), br(),
+                plotlyOutput("plot_tcf", height = 300  ), 
+                br(), br(),
+                plotlyOutput("plot_power", height = 300  ),
+                
+                tags$head(tags$style("#warning_text{color: red; font-size: 18px; font-style: bold; }"  ) )
+ 
+                               
         )
-
 
 
      )
@@ -167,14 +168,17 @@ ui <- fluidPage(
 
 server <- function(input, output, session) {
   
-  rea <- reactiveValues(chip_list = NULL, ds_contr = NULL, ds_vna = NULL, 
-                        contr_files = NULL, ds_tcf = NULL )
+  rea <- reactiveValues(vna_files = NULL, ds_contr = NULL, ds_vna = NULL, 
+                        contr_files = NULL, ds_tcf = NULL,
+                        chip_c = NULL, chip_v = NULL, match = NULL, mode = NULL, 
+                        contr_id = NULL, vna_id = NULL,
+                        fr_c = NULL, fr_v = NULL, p_area = NULL)
   
   
-  SaveData = function(data, w_folder) {
+  SaveData = function(data, w_folder, sdev) {
     #fdir = gsub(paste0('bin/tmp/tmp/', arcname), '', w_folder)
-    fdir = w_folder
-    outfilename = paste0(fdir, 'data_out.csv')
+    fdir = paste0(w_folder, 'output/') 
+    outfilename = paste0(fdir, 'data_', sdev, '.csv')
 
     s = 'write.table(data, outfilename, sep = ",", col.names = T, row.names = F, append = F)'
     s = myTryCatch ( eval(parse(text=s)) )
@@ -222,14 +226,18 @@ server <- function(input, output, session) {
 
       cols = c("Timestamp",  "Freq", #"Input_Voltage", "Input_Current", 
                "Power", "Vpp", "Temp",  #"Flood_Param",  "Fluid_State", "Fixed_Current", 
-               'Parea', "Chip_id", "Mode", "Header_line", "FileName" )
+               'Parea', "Fr", "Chip_id", "Chip_raw", "Mode", "Header_line", "FileName", "Contr_id" )
 
       withProgress({
 
 
         out = data.frame()
+        contr_files = c()
+        
+        id = 1
 
-        f_name = f_list[3]
+        f_list = f_list[1:10]
+        #f_name = f_list[1]
         for (f_name in f_list) {
 
 
@@ -238,7 +246,7 @@ server <- function(input, output, session) {
 
           print(paste('.................... ', f_name, '.................... ') )
 
-          id = match(f_name, f_list)
+          #id = match(f_name, f_list)
 
 
           data <- read.table(paste0(contr_folder, "\\\\", f_name ), col.names = paste("V", 1:100),
@@ -246,49 +254,92 @@ server <- function(input, output, session) {
           data <- data[, which(!is.na(data[1,]))]
 
 
-
-
-          # positions of chip id
-          s = c("chip name")
-          tmp = apply(data, 1, paste, collapse=" ")
-          ixc = grep(s[1], tmp)
-
           # positions of data table headers
-          s = c("Timestamp", "Freq", "Input_Voltage")
+          s = c("Timestamp", "Freq", "Voltage")
           tmp = apply(data, 1, paste, collapse=" ")
           ixh = intersect(intersect(grep(s[1], tmp),grep(s[2], tmp)), grep(s[3], tmp))
 
-          # positions of Press #
-          s = c("Press ")
+          # positions of chip id
+          s = c("Chip name:")
+          tmp = apply(data, 1, paste, collapse=" ")
+          ixc = grep(s[1], tmp)
+
+          # positions of Mode #
+          s = c("Mode:")
           tmp = apply(data, 1, paste, collapse=" ")
           ixp = grep(s[1], tmp)
+          
+          # # old version using Press menu:
+          # if (F) {
+          #   # positions of Press #
+          #   s = c("Press ")
+          #   tmp = apply(data, 1, paste, collapse=" ")
+          #   ixp = grep(s[1], tmp)
+          # 
+          #   i = which(diff(ixp) > 1) # indexes of gaps between Press items
+          #   # positions of maximum items (Press 7)
+          #   if (length(i) > 0) { ixp = ixp[i] } else { ixp = max(ixp) }
+          # }
 
-          i = which(diff(ixp) > 1) # indexes of gaps between Press groups
-          # positions of maximum items (Press 7)
-          if (length(i) > 0) { ixp = ixp[i] } else { ixp = max(ixp) }
-
+          # parse Chip ID and row/col from file name
+          pattern <- "([A-Z]{2})([0-9]{3})[- ]?([0-9]{1,2})[-]([0-9]{1,2})"          
 
           for (i in ixh) {  # go over data headers
+            
+            chid = NA 
+            s0 = NA
+            ii = NA
+            if (length(ixc) > 0) { 
+              
+                # find Chip ID preceding the considered header
+                ii = tail(ixc[ixc < i], 1)       
+                if (length(ii) > 0) { 
+                  
+                  # chid = apply(data[ii+1, ], 1, paste, collapse=" ")
+                  # chid = trimws(as.character(chid))
+                  # chid = gsub(" ", "-", chid, fixed = TRUE)
+                  # chid = toupper( chid)
+                  
+                  s0 = data[ii+1, 1]
+                  ss = toupper(trimws(as.character(s0)) )
+                  ss = gsub(" ", "-", ss, fixed = TRUE)
+                  ss = gsub(".", "-", ss, fixed = TRUE)
+                  
+                  b = str_match(ss, pattern)                           
+                  
+                  if ( !is.na(b[1]) ) {  # if chip name matches the pattern
+                    Col = str_pad(b[4], 2, pad = "0")    # add leading zeros
+                    Row = str_pad(b[5], 2, pad = "0")
+                    chid = paste0(b[2], b[3], '-', Col, '-', Row)
+                  }                   
+                }
+                
+              }
+            print(paste('Chip=', chid, 'i=', i, 'ii=', ii, 'ixc=', paste(ixc, collapse=" ")))
+            
 
-            # find Chip ID preceding the considered header
-            ii = tail(ixc[ixc < i], 1)
-            chid = apply(data[ii+1, ], 1, paste, collapse=" ")
-            chid = trimws(as.character(chid))
-            chid = gsub(" ", "-", chid, fixed = TRUE)
-            chid = toupper( chid)
+            mode = NA
+            ii = NA
+            if (length(ixp) > 0) { 
+              
+              # # find Mode
+              ii = tail(ixp[ixp < i], 1)   
+              if (length(ii) > 0) { 
+                
+                mode = data[ii+1, 1]
+                #mode = as.numeric(mode)                 
+              }
+            }            
 
-            # # find Mode
-            ii = tail(ixp[ixp < i], 1)
-            mode = data[ii+1, 1]
-            #mode = as.numeric(mode)
-
-            print(paste('@@Mode=', mode, 'i=', i, 'ii=', ii, 'ixp=', ixp))
+            print(paste('Mode=', mode, 'i=', i, 'ii=', ii, 'ixp=', paste(ixp, collapse=" ")))
 
 
             # find data table between the header and the first non-numeric row
             ii = which.nonnum(data[, 1] )
             ii = head(ii[ii > i], 1)   # end of the table
 
+            if (length(ii) == 0) {ii = nrow(data)+1}
+            
             if (ii - i < 2) {
               print(paste("Skipped empty table: ",  chid, " | ", i) )
               next
@@ -300,21 +351,30 @@ server <- function(input, output, session) {
             tmp <- tmp[, which(!is.na(tmp[1,]))]                     # drop NA in captions row
             tmp = data.frame(tmp, stringsAsFactors = FALSE)
 
+            # remove rows having NA elements
+            ix =  which(rowSums(is.na( tmp )) == 0)
+            k = nrow(tmp) - length(ix)
+            tmp = tmp[ix, ]
+            
+            print(paste("Imported rows: ", nrow(tmp), " | ", chid, " | ", i, " | skipped rows: ", k) )
+            
 
-            # check the last row in the extracted table
-            k = length( which(is.na( tail(tmp, 1) )) )
-            if (k  > 0) {                 # count NA elements in last row
-
-              print(paste("Skipped last row: ",  chid, " | ", i, " | empty elements: ", k) )
-              tmp = head(tmp, -1)
-            }
+            
+            # # check the last row in the extracted table
+            # k = length( which(is.na( tail(tmp, 1) )) )
+            # if (k  > 0) {                 # count NA elements in last row
+            # 
+            #   print(paste("Skipped last row: ",  chid, " | ", i, " | empty elements: ", k) )
+            #   tmp = head(tmp, -1)
+            # }
 
             # standardize headers name
-            s = gsub("\\s*\\([^\\)]+\\)","", head(tmp, 1))
-            s = gsub(" ", "_", s )
-            colnames(tmp) = s
+            ss = gsub("\\s*\\([^\\)]+\\)","", head(tmp, 1))
+            ss = gsub(" ", "_", ss )
+            colnames(tmp) = ss
             tmp = tmp[-1, ]
 
+            tmp$Chip_raw <- s0
             tmp$Chip_id <- chid
             tmp$Mode <- mode
 
@@ -329,108 +389,147 @@ server <- function(input, output, session) {
             y = tmp$Power
             sP = sum(diff(x) * (head(y,-1)+tail(y,-1)))/2                
             tmp$Parea <- sP
+
+            # resonant frequency
+            ix = which(tmp$Power==min(tmp$Power))
+            Fr = as.numeric(tmp[ix[1], ]['Freq'])
+            tmp$Fr <- round(Fr, 3)   
             
+            tmp$Contr_id <- id
+            
+            contr_files <- rbind( contr_files, c(s0, chid, mode, f_name, nrow(tmp), id) )
+
+            id = id + 1
+            
+                        
             out = rbind(out, tmp[cols])
           }
 
 
         }
 
+
+        incProgress(0.5, detail = '')
+        setProgress(message = 'Controller data preparing')
+        
+        out$Freq = as.numeric(out$Freq)
+       # out$Power10 = out$Power * 10
+        out$Vpp = as.numeric(out$Vpp)
+        out$Temp = as.numeric(out$Temp)
+  
+        # Fr = 10.04     # from VNA
+        # T0 = 22       #(VNA measurement Temp)
+        # TCF75 = -75   #[ppm/C] (lower bound) 
+        # TCF90 = -90   #[ppm/C7] (upper bound)
+        # 
+        # out$fTcf75 = TCF75 * Fr * (out$Temp-T0)/1e6 + Fr
+        # out$fTcf90 = TCF90 * Fr * (out$Temp-T0)/1e6 + Fr
+        
+        
+        
+        contr_files = data.frame(contr_files)
+        colnames(contr_files) = c("Chip_raw", "Chip_id", "Mode", "FileName", "Points", "Contr_id" )
+        
+        # contr_files = unique(out[,c("Chip_raw", "Chip_id","Mode", "Header_line", "FileName")])
+        # contr_files['Contr_id'] = seq(1, nrow(contr_files) )
+        # 
+        # out = merge(x = out, y = contr_files, by = c("Chip_raw", "Chip_id", "Mode", "Header_line", "FileName") )
+      
+        out = out[, c("Chip_id", "Mode", "Timestamp", "Freq",       
+              "Power", "Vpp", "Temp", "Parea", "Fr", "Contr_id" )]
+        
+       # contr_files = contr_files[, c("Chip_raw", "Chip_id", "Mode", "FileName", "Contr_id" )]        
+        
+       
       })
-
-
-
-
-      out$Freq = as.numeric(out$Freq)
-      out$Power10 = out$Power * 10
-      out$Vpp = as.numeric(out$Vpp)
-      out$Temp = as.numeric(out$Temp)
-
-      Fr = 10.04     # from VNA
-      T0 = 22       #(VNA measurement Temp)
-      TCF75 = -75   #[ppm/C] (lower bound) 
-      TCF90 = -90   #[ppm/C7] (upper bound)
       
-      out$fTcf75 = TCF75 * Fr * (out$Temp-T0)/1e6 + Fr
-      out$fTcf90 = TCF90 * Fr * (out$Temp-T0)/1e6 + Fr
-      
-      
-
-      contr_files = unique(out[,c("Chip_id","Mode", "Header_line", "FileName")])
-      contr_files['Contr_id'] = seq(1, nrow(contr_files) )
-      
-      out = merge(x = out, y = contr_files, by = c("Chip_id", "Mode", "Header_line", "FileName") )
-      
-
       #============== START VNA =============
 
+      withProgress({
 
-      # list of available files
-      f_list = list.files(vna_folder, include.dirs = FALSE, recursive=TRUE)
-
-      #  check if the files are of csv type
-      ix = c()
-      f = f_list[253]
-      for (f in f_list) {
-        s = unlist(strsplit(f, "\\."))  # split by dot '.'
-        s1 = unlist(strsplit(f, "/"))  # split by slash '/'
-
-        ix = c(ix, (tail(s, 1)=='csv' ) & !grepl('~', f, fixed = TRUE) &
-                 !("OLD" %in% toupper(s1)) &
-                 # !grepl('DATA_OUT', toupper(tail(s1, 1)), fixed = TRUE) &
-                 # !grepl('INFO_OUT', toupper(tail(s1, 1)), fixed = TRUE) &
-                  grepl('V25-', toupper(head(s1, 1)), fixed = TRUE)  )
-
-      }
-      f_list = f_list[ix]
-
-
-      if (length(f_list) == 0) {
-        df_error = data.frame(c('No available csv files!'))
-        colnames(df_error) = 'Error'
-
-        s = paste0('No available csv files!')
-        infomessage('Error', s)
-        return()
-      }
-
-
-      #--------- Analyze file names
-
-      # parse Chip ID and row/col from file name
-      pattern <- "([A-Z]{2})([0-9]{3})[- ]?([0-9]{1,2})[-]([0-9]{1,2})[-]"
-
-
-      tmp = c()
-      for (c in unique(f_list) ) {
-        s0 = tail(unlist(strsplit(c, "/")), 1)  # split by slash '/'
-        s = unlist(strsplit(s0, "[(]"))[1]  # ignore all after bracket "("
-        s = gsub(" ", "-", s, fixed = TRUE)
-        s = gsub(".", "-", s, fixed = TRUE)
-
-        b = str_match(s, pattern)
-        chip_id = substr(b[1], 1, nchar(b[1])-1)
-        r = c(c, s0, chip_id, b[4], b[5])
-
-        tmp = rbind(tmp, r)
-      }
-      tmp = as.data.frame(tmp)
-      colnames(tmp) = c('W_fname', 'Fname', 'Chip_id', 'Col', 'Row')
-      tmp['Col'] = str_pad(tmp$Col, 2, pad = "0") # add leading zeros
-      tmp['Row'] = str_pad(tmp$Row, 2, pad = "0")
-      tmp['Vna_id'] = seq(1, nrow(tmp))
-
-      vna_files = tmp
-
-
-
-      # chips presented both in VNA and controller data
-      chip_list = merge(x = contr_files, y = vna_files, by = "Chip_id")     # inner join
-      chip_list = chip_list[c("Contr_id", "Chip_id", "Col" , "Row" ,  "FileName",  "W_fname", "Mode", "Vna_id" )  ]
-      colnames(chip_list) = c("Contr_id", "Chip_id", "Col" , "Row" ,  "File_Contr", "File_VNA", "Mode", "Vna_id")
-
-      chip_list = data.frame(chip_list, stringsAsFactors = FALSE)
+        incProgress(0.5, detail = '')
+        setProgress(message = 'VNA files analyzing')
+        
+        # list of available files
+        f_list = list.files(vna_folder, include.dirs = FALSE, recursive=TRUE)
+  
+        #  check if the files are of csv type
+        ix = c()
+        f = f_list[253]
+        for (f in f_list) {
+          s = unlist(strsplit(f, "\\."))  # split by dot '.'
+          s1 = unlist(strsplit(f, "/"))  # split by slash '/'
+  
+          ix = c(ix, (tail(s, 1)=='csv' ) & !grepl('~', f, fixed = TRUE) &
+                   !("OLD" %in% toupper(s1)) &
+                   # !grepl('DATA_OUT', toupper(tail(s1, 1)), fixed = TRUE) &
+                   # !grepl('INFO_OUT', toupper(tail(s1, 1)), fixed = TRUE) &
+                    grepl('V25-', toupper(head(s1, 1)), fixed = TRUE)  )
+  
+        }
+        f_list = f_list[ix]
+  
+  
+        if (length(f_list) == 0) {
+          df_error = data.frame(c('No available csv files!'))
+          colnames(df_error) = 'Error'
+  
+          s = paste0('No available csv files!')
+          infomessage('Error', s)
+          return()
+        }
+  
+  
+        #--------- Analyze file names
+  
+        # parse Chip ID and row/col from file name
+        pattern <- "([A-Z]{2})([0-9]{3})[- ]?([0-9]{1,2})[-]([0-9]{1,2})[-]"
+  
+        fn = f_list[1]
+        tmp = c()
+        for (fn in unique(f_list) ) {
+          s0 = tail(unlist(strsplit(fn, "/")), 1)  # split by slash '/'
+          s = unlist(strsplit(s0, "[(]"))[1]  # ignore all after bracket "("
+          s = gsub(" ", "-", s, fixed = TRUE)
+          s = gsub(".", "-", s, fixed = TRUE)
+  
+          b = str_match(s, pattern)
+          
+          if ( !is.na(b[1]) ) {  # if file name matches the pattern
+            Col = str_pad(b[4], 2, pad = "0")    # add leading zeros
+            Row = str_pad(b[5], 2, pad = "0")
+            chip_id = paste0(b[2], b[3], '-', Col, '-', Row)
+            r = c(fn, s0, chip_id, Col, Row)
+          } else {
+            r = c(fn, s0, NA, NA, NA)
+          }
+          tmp = rbind(tmp, r)
+        }
+        tmp = as.data.frame(tmp)
+        colnames(tmp) = c('W_fname', 'Fname', 'Chip_id', 'Col', 'Row')
+  
+        tmp['Vna_id'] = seq(1, nrow(tmp))
+  
+        vna_files = tmp[, c('W_fname', 'Chip_id', 'Col', 'Row', 'Vna_id')]
+  
+  
+  
+        # standard chip_id only
+        tmp = contr_files[which(!is.na(contr_files$Chip_id)), ]
+        
+        # vna chips presented in controller data
+        vna_files = vna_files %>% filter(Chip_id %in% tmp$Chip_id)
+        
+  
+        # # chips presented both in VNA and controller data
+        # tmp1 = vna_files[which(!is.na(vna_files$Chip_id)), ]
+        # chip_list = merge(x = tmp, y = tmp1, by = "Chip_id")     # inner join
+        # chip_list = chip_list[c("Contr_id", "Chip_id", "Col" , "Row" ,  "FileName",  "W_fname", "Mode", "Vna_id" )  ]
+        # colnames(chip_list) = c("Contr_id", "Chip_id", "Col" , "Row" ,  "File_Contr", "File_VNA", "Mode", "Vna_id")
+        # 
+        # chip_list = data.frame(chip_list, stringsAsFactors = FALSE)
       
+      })
       
       #------------------ VNA data
       
@@ -439,12 +538,12 @@ server <- function(input, output, session) {
 
       withProgress({
       
-
-        vna_list =  unique(chip_list$Vna_id)  
+        vna_id = 295
+        vna_list =  unique(vna_files$Vna_id)  
         for (vna_id in vna_list) {
           
-          ix = which(chip_list$Vna_id == vna_id)
-          f_name =  as.character(chip_list[ix[1], 6]) 
+          ix = which(vna_files$Vna_id == vna_id)
+          f_name =  as.character(vna_files[ix[1], 1]) 
           f_name = gsub("/", "\\\\", f_name, fixed = TRUE)
   
           incProgress(1/length(vna_list), detail = f_name)
@@ -453,8 +552,12 @@ server <- function(input, output, session) {
           print('......................................................')
           
           print(f_name)
-
-          data  <- read_csv(paste0(vna_folder, "\\\\", f_name ), skip=4, col_types = cols())
+          # try commas as separators
+          data  <- read_delim(paste0(vna_folder, "\\\\", f_name ), ',', skip=4, col_types = cols())
+          
+          if (ncol(data) < 2) {  # if commas do not work, try semicolons
+            data  <- read_delim(paste0(vna_folder, "\\\\", f_name ), ';', skip=4, col_types = cols())
+          }
           if (ncol(data) < 2) next
           
           # exclude columns containing non-numeric data
@@ -463,41 +566,45 @@ server <- function(input, output, session) {
           tmp = as.data.frame(apply(tmp, 2, prod))
           
           ix = which(tmp[,1] ==1)
-          rownames(tmp)[ix]
+          #rownames(tmp)[ix]
           data  <- data[ rownames(tmp)[ix] ]
           if (ncol(data) < 2) next
 
           # adjust target columns (add new or remove columns)
-          cols = c('F', 'S', 'Z', 'R', 'X') 
+          cols = c('Freq', 'S', 'Z', 'R', 'X') 
 
           colnames(data) = cols
           
           data['Vna_id'] = vna_id
-          data['F'] =  data$F / 1e6
+          data['Freq'] =  data$Freq / 1e6
           
           data['Smin'] = data$S==min(data$S)
           ix = which(data$S==min(data$S))
-          data['Fr'] = data[ix, 1] 
+          data['Fr'] = data[ix[1], 1] 
           
-          out2 = rbind(out2, data[c(cols, c('Fr', 'Vna_id'))])
+          data['Points'] = nrow(data) 
+          
+          out2 = rbind(out2, data[c(cols, c('Fr', 'Points', 'Vna_id'))])
               
         }
       })
       
-      # link Fr from VNA  to Controller data
-      tmp = unique(out2[, c('Vna_id', 'Fr')])
-      tmp1 = unique(vna_files[, c('Vna_id', 'Chip_id')]) 
-      tmp = merge(x = tmp, y = tmp1, by = "Vna_id")     # inner join
+      # link Points  to VNA file list
+      if (nrow(out2) > 0) {
+        tmp = unique(out2[, c('Vna_id', 'Points')]) 
+        vna_files = merge(x = vna_files, y = tmp, by = "Vna_id", all.x = TRUE)     # left join
+        
+        # tmp = unique(vna_files[, c('Vna_id', 'Chip_id')]) 
+        # out2 = merge(x = out2, y = tmp, by = "Vna_id", all.x = TRUE)     # left join        
+      }
       
-      
-      #outv = merge(x = out, y = tmp, by = "Chip_id", all.x = TRUE)     # left join
-      
-      
-      
+     # contr_files = contr_files %>% filter(Contr_id == 8)
 
-      return ( list('out' = out, #'outv' = outv, 
+      
+      
+      return ( list('out' = out, 
                     'contr_files' = contr_files,
-                    'vna_files' = vna_files, 'chip_list' = chip_list, 'out2' = out2) )
+                    'vna_files' = vna_files,  'out2' = out2) )
 
   }
 
@@ -523,14 +630,13 @@ server <- function(input, output, session) {
     contr_data <<- res$out
     contr_files <<- res$contr_files
     vna_files <<- res$vna_files
-    chip_list <<- res$chip_list
     vna_data <<- res$out2
     
-    rea$chip_list <- chip_list
+    #rea$chip_list <- chip_list
     rea$contr_files <- contr_files
-   
+    rea$vna_files <- vna_files
     
-    x <- sort(as.vector(unique(chip_list$Chip_id)))
+    x <- sort(as.vector(unique(res$vna_files$Chip_id)))
     x = choices = c('All', x)
     updatePickerInput(session, "chip_input",  choices = x   )
     
@@ -541,10 +647,16 @@ server <- function(input, output, session) {
     if (is_save) {
       withProgress({
   
-        incProgress(0.7, detail = '')
-        setProgress(message = 'Data saving')
+        incProgress(0.3, detail = '')
+        setProgress(message = 'Controller data saving')
   
-        SaveData(contr_data, w_folder)
+        SaveData(contr_data, w_folder, 'contr')
+        
+        
+        incProgress(0.7, detail = '')
+        setProgress(message = 'VNA data saving')
+        
+        SaveData(vna_data, w_folder, 'vna')
       })
     }
 
@@ -559,14 +671,14 @@ server <- function(input, output, session) {
       
       if (input$chip_input == 'All') {
         tmp = contr_files
-        tmp1 = chip_list
+        tmp1 = vna_files
       } else {
         tmp = contr_files %>% filter(Chip_id %in% input$chip_input)
-        tmp1 = chip_list %>% filter(Chip_id %in% input$chip_input)
+        tmp1 = vna_files %>% filter(Chip_id %in% input$chip_input)
       }
       
       rea$contr_files = tmp
-      rea$chip_list = tmp1
+      rea$vna_files = tmp1
       
       
       # x = sort(as.vector(unique(tmp$Mode)))
@@ -574,62 +686,58 @@ server <- function(input, output, session) {
       # updatePickerInput(session, "mode_input", choices = x, selected = x  )
       
     }
-  }, ignoreNULL = TRUE)  
+  }, ignoreNULL = F)  
   
   
   
-  # observeEvent(input$mode_input, {
-  #   
-  #   if (is.null(input$mode_input)) return()
-  # 
-  #   if (exists('contr_files')) {
-  #     
-  #     if (input$mode_input == 'All') {
-  #       tmp = contr_files
-  #     } else {
-  #       tmp = contr_files %>% filter(Mode %in% input$mode_input)
-  #     }
-  # 
-  #     rea$contr_files = tmp
-  # 
-  # 
-  #   }
-  # }, ignoreNULL = TRUE)    
+
   
   
-  
-  #-------------------- TCF tab ---------------
+  #-------------------- Controller interface ---------------
   
   output$contr_table <- DT::renderDataTable({
 
       if (length(rea$contr_files) > 0) {
-      
+
       tmp = rea$contr_files
       DT::datatable(tmp, rownames = FALSE,  class="compact",
-                    caption = htmltools::tags$caption( style = 'caption-side: top; text-align: left; color:black; font-size:130% ;','Table1: Controller datasets found in controller csv files'),
+                    caption = htmltools::tags$caption( style = 'caption-side: top; text-align: left; color:black; font-size:130% ;','Table1: Controller datasets (chips found in controller csv files)'),
                     selection = list(mode = 'single', selected = 1),
                     options = list(lengthMenu = c(10, 50, 100, 500),  pageLength = 7,  dom = 'Brtip',  deferRender = TRUE,
                                    scroller = TRUE,
-                                   autoWidth = TRUE ))   %>% 
+                                   autoWidth = TRUE ))   %>%
                    formatStyle(columns = colnames(.), fontSize = '10%')
     }
 
   })
-  
 
-  
+
+
   observeEvent(input$contr_table_rows_selected, {
-    print(length(rea$contr_files))
-    
-    if (length(rea$contr_files) > 0) {
+
+
+    if (nrow(rea$contr_files) > 0) {
       i = input$contr_table_rows_selected
       if (length(i) == 0) { i = 1 }
 
       tmp <- rea$contr_files[i, ]
+      rea$chip_c <- tmp$Chip_id
+      rea$mode <- tmp$Mode
+      rea$contr_id <- tmp$Contr_id
+      
+      rea$ds_contr <- contr_data %>% filter(Contr_id == rea$contr_id) %>% arrange(Timestamp) 
+      rea$p_area = round(as.numeric(head(rea$ds_contr$Parea, 1)), 2)
+      rea$fr_c = round(as.numeric(head(rea$ds_contr$Fr, 1)), 3)     
 
-
-      rea$ds_tcf <- contr_data %>% filter(Contr_id == tmp$Contr_id)
-      print(tmp$Contr_id)
+      rea$match = F
+      if ( ( !is.blank(rea$chip_c)  ) & ( !is.blank(rea$chip_v) ) ) {
+        rea$match <- ( rea$chip_v == rea$chip_c) 
+      }   
+      
+            
+      print( paste('contr_id=', rea$contr_id) )      
+      print( paste('chip_c=', rea$chip_c) )
+      print( paste('mode=', rea$mode) )
     }
   })
 
@@ -637,13 +745,17 @@ server <- function(input, output, session) {
 
   output$plot_tcf <- renderPlotly({
 
-
-    ds = rea$ds_tcf
-    mode_id = head(ds$Mode, 1)
-    print(mode_id)
-
+    ds = rea$ds_contr
+    ds1 = rea$ds_vna
+    
     if (is.null(ds) )  return()
     if (nrow(ds) == 0) return()
+    
+    #ds <- ds %>% arrange(Timestamp) 
+    
+    # mode_id = head(ds$Mode, 1)
+    # print(mode_id)
+
 
     xx = ds$Timestamp
 
@@ -651,21 +763,46 @@ server <- function(input, output, session) {
       add_trace(data = ds, x = xx, y = ~Freq,
                 type = 'scatter', name = 'Freq', mode = 'lines+markers') %>%
       add_trace(data = ds, x = xx, y = ~Temp, name = 'Temp', yaxis = "y2", type = 'scatter', mode = 'lines+markers') %>%
-      
-      add_trace(data = ds, x = xx, y = ~fTcf75, name = 'fTcf75', yaxis = "y", 
-                type = 'scatter', mode = 'lines', line = list(dash = "dot", color = "darkseagreen")) %>%      
-      add_trace(data = ds, x = xx, y = ~fTcf90, name = 'fTcf90', yaxis = "y",
-                type = 'scatter', mode = 'lines', 
-                fill = 'tonexty', fillcolor='rgba(0,100,80,0.2)',
-                line = list(dash = "dot", color = "darkseagreen")) %>%      
 
 
       layout(yaxis2 = list(title = "Temp", overlaying = "y", side = "right", automargin = T))
 
+    
+    if (!is.null(ds1) ) {
+      if (nrow(ds1) > 0) {
+        
+        #chid = head(ds$Chip_id, 1)
+        
+          
+        if (rea$match) {  
+
+            Fr1 = rea$fr_v #round(head(ds1$Fr, 1), 3)
+            
+            T0 = 22       #(VNA measurement Temp)
+            TCF75 = -75   #[ppm/C] (lower bound)
+            TCF90 = -90   #[ppm/C7] (upper bound)
+            
+            ds$fTcf75 = TCF75 * Fr1 * (ds$Temp-T0)/1e6 + Fr1
+            ds$fTcf90 = TCF90 * Fr1 * (ds$Temp-T0)/1e6 + Fr1    
+            
+            
+            
+            p <- p %>% 
+              add_trace(data = ds, x = xx, y = ~fTcf75, name = 'fTcf75', yaxis = "y",
+                      type = 'scatter', mode = 'lines', line = list(dash = "dot", color = "darkseagreen")) %>%
+              add_trace(data = ds, x = xx, y = ~fTcf90, name = 'fTcf90', yaxis = "y",
+                        type = 'scatter', mode = 'lines',
+                        fill = 'tonexty', fillcolor='rgba(0,100,80,0.2)',
+                        line = list(dash = "dot", color = "darkseagreen"))             
+
+
+        }
+      }
+    }    
 
     p <- p %>%
       layout(yaxis = list(title = "Freq"),  xaxis = list(title = "Time, s"),
-             title = paste('Controller vs. VNA/TCF  theory: Mode =', mode_id),
+             title = paste0('Controller vs. VNA/TCF  theory: ', ' Contr_id = ', rea$contr_id, '; Vna_id = ', rea$vna_id),
              legend = list(orientation = "h", xanchor = "center", x = 0.5)
              ) %>%
 
@@ -675,155 +812,187 @@ server <- function(input, output, session) {
     p
 
   })
-  
+
   output$plot_power <- renderPlotly({
-    
-    
-    ds = rea$ds_tcf
-    mode_id = head(ds$Mode, 1)
-    p_area = round(as.numeric(head(ds$Parea, 1)), 2)
-    
-    print(mode_id)
-    
+
+
+    ds = rea$ds_contr
+
     if (is.null(ds) )  return()
     if (nrow(ds) == 0) return()
     
-    xx = ds$Timestamp
+    #ds <- ds %>% arrange(Timestamp) 
     
+    # mode_id = head(ds$Mode, 1)
+    # p_area = round(as.numeric(head(ds$Parea, 1)), 2)
+    # print(mode_id)
+
+    xx = ds$Timestamp
+
     p <- plot_ly()    %>%
       add_trace(data = ds, x = xx, y = ~Power,
                 type = 'scatter', name = 'Power', mode = 'lines+markers') %>%
-      add_trace(data = ds, x = xx, y = ~Vpp, name = 'Temp', yaxis = "y2", type = 'scatter', mode = 'lines+markers') %>%
+      add_trace(data = ds, x = xx, y = ~Vpp, name = 'Vpp', yaxis = "y2", type = 'scatter', mode = 'lines+markers') %>%
       layout(yaxis2 = list(title = "Vpp", overlaying = "y", side = "right", automargin = T))
-    
-    
-    
+
+
+
     p <- p %>%
       layout(yaxis = list(title = "Power"),  xaxis = list(title = "Time, s"),
-             title = paste0('Power Savings and Peak Voltage Reduction: Mode =', mode_id,  ';  P_area = ', p_area),
+             title = paste0('Power Savings and Peak Voltage Reduction ( P_area = ', rea$p_area, '): ', ' Contr_id = ', rea$contr_id),
              legend = list(orientation = "v", xanchor = "center", x = 0.5)
       ) %>%
-      
-      
+
+
       config(displaylogo = FALSE) %>%
       config(modeBarButtonsToRemove = c("select2d", "lasso2d", "hoverClosestCartesian", "hoverCompareCartesian"))
     p
-    
+
   })
   
   
-  #----------------------------- VNA tab --------------------------  
+  #----------------------------- VNA interface --------------------------  
   
   
-  output$chip_table <- DT::renderDataTable({
-    
-    if (length(rea$chip_list) > 0) {
-      
-      tmp = rea$chip_list
+  output$vna_table <- DT::renderDataTable({
+
+    if (length(rea$vna_files) > 0) {
+
+      tmp = rea$vna_files
       DT::datatable(tmp, rownames = FALSE,  class="compact",
-                    caption = htmltools::tags$caption( style = 'caption-side: top; text-align: left; color:black; font-size:130% ;','Table2: Chips found both in VNA and Controller data'),
+                    caption = htmltools::tags$caption( style = 'caption-side: top; text-align: left; color:black; font-size:130% ;','Table2: VNA datasets (chips corresponding to controller data only)'),
                     selection = list(mode = 'single', selected = 1),
-                    options = list(lengthMenu = c(10, 50, 100, 500),  pageLength = 10,  dom = 'Brtip',  deferRender = TRUE,
+                    options = list(lengthMenu = c(10, 50, 100, 500),  pageLength = 7,  dom = 'Brtip',  deferRender = TRUE,
                                    scroller = TRUE
                     ))   %>% formatStyle(columns = colnames(.), fontSize = '20%')
     }
-    
-  })
-  
-  
-  
-  observeEvent(input$chip_table_rows_selected, {
-    
-    if (length(rea$chip_list) > 0) {
-      i = input$chip_table_rows_selected
-      if (length(i) == 0) { i = 1 }
-      
-      tmp <- rea$chip_list[i, ]
 
-      rea$ds_contr <- contr_data %>% filter(Contr_id == tmp$Contr_id)
-      rea$ds_vna <- vna_data %>% filter(Vna_id == tmp$Vna_id)      
+  })
+
+
+
+  observeEvent(input$vna_table_rows_selected, {
+
+    if (nrow(rea$vna_files) > 0) {
+      i = input$vna_table_rows_selected
+      if (length(i) == 0) { i = 1 }
+
+      tmp <- rea$vna_files[i, ]
+      rea$chip_v <- tmp$Chip_id
+      rea$vna_id <- tmp$Vna_id
+      
+      rea$ds_vna <- vna_data %>% filter(Vna_id == rea$vna_id) %>% arrange(Freq) 
+      rea$fr_v = round(as.numeric(head(rea$ds_vna$Fr, 1)), 3)      
+
+      rea$match = F
+      if ( ( !is.blank(rea$chip_c)  ) & ( !is.blank(rea$chip_v) ) ) {
+        rea$match <- ( rea$chip_v == rea$chip_c) 
+      }   
+      
+      print( paste('vna_id=', rea$vna_id) )      
+      print( paste('chip_v=', rea$chip_v) )
+      
+      
     }
-  })  
-  
-  
-  
-  output$plot_chip <- renderPlotly({
-    
-    
-    ds = rea$ds_contr 
-    ds1 = rea$ds_vna 
-    
-    if (is.null(ds) )  return() 
+  })
+
+
+
+  output$plot_freq <- renderPlotly({
+
+
+    ds = rea$ds_contr
+    ds1 = rea$ds_vna
+
+    if (is.null(ds) )  return()
     if (nrow(ds) == 0) return()
+
+    ds <- ds %>% arrange(Freq) 
     
-    ix = which(ds$Power==min(ds$Power))
-    Fr = as.numeric(ds[ix, ]['Freq'])
-    Fr = round(Fr, 3)
+    # ix = which(ds$Power==min(ds$Power))
+    # Fr = as.numeric(ds[ix[1], ]['Freq'])
+    # Fr = round(Fr, 3)
     #print(Fr)
-    
+
     offset = 0.75
-    
+
     p <- plot_ly()    %>%
       add_trace(data = ds, x = ~Freq, y = ~Power,
                 type = 'scatter', name = 'Power', mode = 'lines+markers') %>%
 
-    add_trace(x = Fr-0.01,
+    add_trace(x = rea$fr_c - 0.01,
               y = max(ds$Power)*1.3,
-              mode = 'text',  text = paste0('', Fr ),
-              type = 'scatter', showlegend = FALSE, yaxis = "y",
+              mode = 'text',  text = paste0('', rea$fr_c ),
+              type = 'scatter', showlegend = F, yaxis = "y",
               textfont = list(color = 'cadetblue', size = 12)
     )
 
-    lines =  list(type='line', x0 = Fr, x1 = Fr, y0=min(ds$Power), y1=max(ds$Power)*1.3, yref = "y",
+    lines =  list(type='line', x0 = rea$fr_c, x1 = rea$fr_c, y0=min(ds$Power), y1=max(ds$Power)*1.3, yref = "y",
                   line=list(dash='dot', width=3, color = 'lightblue',  name = 'Fr Contr'))
-    
+
     if (!is.null(ds1) ) {
       if (nrow(ds1) > 0) {
         
-        Fr1 = round(head(ds1$Fr, 1), 3)
+       # chid = head(ds$Chip_id, 1)
         
+        if (rea$match) {  
+          
 
-                       
-        p <- p %>% 
-       
-        add_trace(data = ds1, x = ~F, y = ~S, name = 'VNA S11', yaxis = "y2", color = 'orange', type = 'scatter', mode = 'lines+markers') %>%
-          layout(yaxis2 = list(title = "VNA S11", overlaying = "y", side = "right", automargin = T))    %>%    
-        
-        
-          
-        add_trace(x = Fr1+0.01,
-                    y = max(ds1$S)+offset,
-                    mode = 'text',  text = paste0('', Fr1 ),
-                    type = 'scatter', showlegend = FALSE, yaxis = "y2",
-                    textfont = list(color = 'orange', size = 12)
-         )
-          
-        
-        lines = list(  lines,
-                       list(type='line', x0 = Fr1, x1 = Fr1, y0=min(ds1$S), y1=max(ds1$S), yref = "y2",
-                            line=list(dash='dot', width=3, color = 'lightpink',  name = 'Fr VNA'))
-                    )
-        
-      }
-    }  
+            #ds1 <- ds1 %>% arrange(Freq) 
+            #Fr1 = round(head(ds1$Fr, 1), 3)
     
     
-    p <- p %>%      
+            p <- p %>%
+    
+            add_trace(data = ds1, x = ~Freq, y = ~S, name = 'VNA S,dB', yaxis = "y2", color = 'orange', type = 'scatter', mode = 'lines+markers') %>%
+              layout(yaxis2 = list(title = "VNA S,dB", overlaying = "y", side = "right", automargin = T))    %>%
+    
+    
+    
+            add_trace(x = rea$fr_v + 0.01,
+                        y = max(ds1$S)+offset,
+                        mode = 'text',  text = paste0('', rea$fr_v ),
+                        type = 'scatter', showlegend = FALSE, yaxis = "y2",
+                        textfont = list(color = 'orange', size = 12)
+             )
+    
+    
+            lines = list(  lines,
+                           list(type='line', x0 = rea$fr_v, x1 = rea$fr_v, y0=min(ds1$S), y1=max(ds1$S), yref = "y2",
+                                line=list(dash='dot', width=3, color = 'lightpink',  name = 'Fr VNA'))
+                        )
+            
+
+          }
+        }
+    }
+
+
+    p <- p %>%
       layout(yaxis = list(title = "Power"),  xaxis = list(title = "Freq, MHz"),
-             title = 'Controller vs VNA data comparison',
+             title = paste('Controller vs VNA data comparison: ', ' Contr_id = ', rea$contr_id, '; Vna_id = ', rea$vna_id),
              legend = list(orientation = "h", xanchor = "center", x = 0.8),
              shapes = lines) %>%
-      
+
 
       config(displaylogo = FALSE) %>%
       config(modeBarButtonsToRemove = c("select2d", "lasso2d", "hoverClosestCartesian", "hoverCompareCartesian"))
     p
+
+  })
+  
+  
+  
+  output$warning_text = renderText({
     
+    if ( ( is.blank(rea$chip_c)  ) & ( is.blank(rea$chip_v) ) ) return()
+    
+    if (!rea$match)  {
+      ('Selected chips do not match! ')
+    } else {
+      ('')
+    }
   })    
-  
-  
-  
-  
   
   
   
