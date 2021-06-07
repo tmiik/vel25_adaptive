@@ -37,19 +37,22 @@ library(reshape2)
  
 #================ Settings ========================
 
-w_folder = "H:\\PD\\Vel25\\vel25_adaptive\\"
 
-is_test = T
+is_test = F
 is_save = F
 
+
+
 if (is_test) {
+  w_folder = "H:\\PD\\Vel25\\vel25_adaptive\\"
   
   vna_folder = paste0(w_folder, "VNA\\")
   contr_folder = paste0(w_folder, "PuttyFiles - Central\\")   
   
 } else {
+  w_folder = "\\\\tmi21\\Private\\R&D\\MechProdDev\\Projects\\Concept Development\\1805 Velocity25\\Testing\\Electrical\\Measurements\\"
   
-  vna_folder = paste0(w_folder, "VNA\\")
+  vna_folder = paste0(w_folder, "")
   contr_folder = paste0(w_folder, "PuttyFiles - Central\\")   
 }
 
@@ -236,7 +239,7 @@ server <- function(input, output, session) {
         
         id = 1
 
-        f_list = f_list[1:10]
+        f_list = head(f_list, 10)
         #f_name = f_list[1]
         for (f_name in f_list) {
 
@@ -408,7 +411,15 @@ server <- function(input, output, session) {
 
         }
 
-
+        if (nrow(out) == 0) {
+          df_error = data.frame(c('No available csv files!'))
+          colnames(df_error) = 'Error'
+          
+          s = paste0('No data available csv files!')
+          infomessage('Error', s)
+          return()
+        }
+        
         incProgress(0.5, detail = '')
         setProgress(message = 'Controller data preparing')
         
@@ -425,18 +436,26 @@ server <- function(input, output, session) {
         # out$fTcf75 = TCF75 * Fr * (out$Temp-T0)/1e6 + Fr
         # out$fTcf90 = TCF90 * Fr * (out$Temp-T0)/1e6 + Fr
         
+        T0 = 22       #(VNA measurement Temp)
+        TCF75 = -75   #[ppm/C] (lower bound)
+        TCF90 = -90   #[ppm/C7] (upper bound)
+        
+        out$fTcf75 = TCF75  * (out$Temp-T0)/1e6 + 1
+        out$fTcf90 = TCF90  * (out$Temp-T0)/1e6 + 1    
         
         
         contr_files = data.frame(contr_files)
         colnames(contr_files) = c("Chip_raw", "Chip_id", "Mode", "FileName", "Points", "Contr_id" )
+        
+        contr_files$Points = as.numeric(as.character(contr_files$Points))
         
         # contr_files = unique(out[,c("Chip_raw", "Chip_id","Mode", "Header_line", "FileName")])
         # contr_files['Contr_id'] = seq(1, nrow(contr_files) )
         # 
         # out = merge(x = out, y = contr_files, by = c("Chip_raw", "Chip_id", "Mode", "Header_line", "FileName") )
       
-        out = out[, c("Chip_id", "Mode", "Timestamp", "Freq",       
-              "Power", "Vpp", "Temp", "Parea", "Fr", "Contr_id" )]
+        out = out[, c( "Timestamp", "Freq", "Power", "Vpp", "Temp",       
+                       "Parea", "Fr", "fTcf75", "fTcf90", "Contr_id" )]
         
        # contr_files = contr_files[, c("Chip_raw", "Chip_id", "Mode", "FileName", "Contr_id" )]        
         
@@ -469,17 +488,22 @@ server <- function(input, output, session) {
         }
         f_list = f_list[ix]
   
+      })
+      
+      
+      if (length(f_list) == 0) {
+        df_error = data.frame(c('No available csv files!'))
+        colnames(df_error) = 'Error'
+
+        s = paste0('No available csv files!')
+        infomessage('Error', s)
+        return()
+      }
   
-        if (length(f_list) == 0) {
-          df_error = data.frame(c('No available csv files!'))
-          colnames(df_error) = 'Error'
-  
-          s = paste0('No available csv files!')
-          infomessage('Error', s)
-          return()
-        }
-  
-  
+        
+        
+      withProgress({
+          
         #--------- Analyze file names
   
         # parse Chip ID and row/col from file name
@@ -510,7 +534,7 @@ server <- function(input, output, session) {
   
         tmp['Vna_id'] = seq(1, nrow(tmp))
   
-        vna_files = tmp[, c('W_fname', 'Chip_id', 'Col', 'Row', 'Vna_id')]
+        vna_files = tmp[, c('W_fname', 'Chip_id', 'Vna_id')]
   
   
   
@@ -593,13 +617,20 @@ server <- function(input, output, session) {
       if (nrow(out2) > 0) {
         tmp = unique(out2[, c('Vna_id', 'Points')]) 
         vna_files = merge(x = vna_files, y = tmp, by = "Vna_id", all.x = TRUE)     # left join
+        vna_files$Points = as.numeric(vna_files$Points)
+        
+        vna_files = vna_files[, c('Chip_id', 'W_fname', 'Points', 'Vna_id')]
         
         # tmp = unique(vna_files[, c('Vna_id', 'Chip_id')]) 
         # out2 = merge(x = out2, y = tmp, by = "Vna_id", all.x = TRUE)     # left join        
+                
       }
       
      # contr_files = contr_files %>% filter(Contr_id == 8)
 
+      
+      
+      
       
       
       return ( list('out' = out, 
@@ -746,13 +777,13 @@ server <- function(input, output, session) {
   output$plot_tcf <- renderPlotly({
 
     ds = rea$ds_contr
-    ds1 = rea$ds_vna
-    
+    #ds1 = rea$ds_vna
+
     if (is.null(ds) )  return()
     if (nrow(ds) == 0) return()
-    
-    #ds <- ds %>% arrange(Timestamp) 
-    
+
+    #ds <- ds %>% arrange(Timestamp)
+
     # mode_id = head(ds$Mode, 1)
     # print(mode_id)
 
@@ -767,38 +798,39 @@ server <- function(input, output, session) {
 
       layout(yaxis2 = list(title = "Temp", overlaying = "y", side = "right", automargin = T))
 
-    
-    if (!is.null(ds1) ) {
-      if (nrow(ds1) > 0) {
-        
-        #chid = head(ds$Chip_id, 1)
-        
-          
-        if (rea$match) {  
 
-            Fr1 = rea$fr_v #round(head(ds1$Fr, 1), 3)
-            
-            T0 = 22       #(VNA measurement Temp)
-            TCF75 = -75   #[ppm/C] (lower bound)
-            TCF90 = -90   #[ppm/C7] (upper bound)
-            
-            ds$fTcf75 = TCF75 * Fr1 * (ds$Temp-T0)/1e6 + Fr1
-            ds$fTcf90 = TCF90 * Fr1 * (ds$Temp-T0)/1e6 + Fr1    
-            
-            
-            
-            p <- p %>% 
-              add_trace(data = ds, x = xx, y = ~fTcf75, name = 'fTcf75', yaxis = "y",
+    # if (!is.null(ds1) ) {
+    #   if (nrow(ds1) > 0) {
+
+        #chid = head(ds$Chip_id, 1)
+
+
+        if (rea$match) {
+
+            Fr1 = rea$fr_v    #round(head(ds1$Fr, 1), 3)
+
+            # T0 = 22       #(VNA measurement Temp)
+            # TCF75 = -75   #[ppm/C] (lower bound)
+            # TCF90 = -90   #[ppm/C7] (upper bound)
+            #
+            # ds$fTcf75 = TCF75 * Fr1 * (ds$Temp-T0)/1e6 + Fr1
+            # ds$fTcf90 = TCF90 * Fr1 * (ds$Temp-T0)/1e6 + Fr1
+
+            b75 = ds$fTcf75 * Fr1
+            b90 = ds$fTcf90 * Fr1
+
+            p <- p %>%
+              add_trace(data = ds, x = xx, y = b75, name = 'fTcf75', yaxis = "y",
                       type = 'scatter', mode = 'lines', line = list(dash = "dot", color = "darkseagreen")) %>%
-              add_trace(data = ds, x = xx, y = ~fTcf90, name = 'fTcf90', yaxis = "y",
+              add_trace(data = ds, x = xx, y = b90, name = 'fTcf90', yaxis = "y",
                         type = 'scatter', mode = 'lines',
                         fill = 'tonexty', fillcolor='rgba(0,100,80,0.2)',
-                        line = list(dash = "dot", color = "darkseagreen"))             
+                        line = list(dash = "dot", color = "darkseagreen"))
 
 
         }
-      }
-    }    
+    #   }
+    # }
 
     p <- p %>%
       layout(yaxis = list(title = "Freq"),  xaxis = list(title = "Time, s"),
@@ -902,13 +934,13 @@ server <- function(input, output, session) {
 
 
     ds = rea$ds_contr
-    ds1 = rea$ds_vna
+    
 
     if (is.null(ds) )  return()
     if (nrow(ds) == 0) return()
 
-    ds <- ds %>% arrange(Freq) 
-    
+    ds <- ds %>% arrange(Freq)
+
     # ix = which(ds$Power==min(ds$Power))
     # Fr = as.numeric(ds[ix[1], ]['Freq'])
     # Fr = round(Fr, 3)
@@ -930,42 +962,43 @@ server <- function(input, output, session) {
     lines =  list(type='line', x0 = rea$fr_c, x1 = rea$fr_c, y0=min(ds$Power), y1=max(ds$Power)*1.3, yref = "y",
                   line=list(dash='dot', width=3, color = 'lightblue',  name = 'Fr Contr'))
 
-    if (!is.null(ds1) ) {
-      if (nrow(ds1) > 0) {
-        
-       # chid = head(ds$Chip_id, 1)
-        
-        if (rea$match) {  
-          
+    # if (!is.null(ds1) ) {
+    #   if (nrow(ds1) > 0) {
 
-            #ds1 <- ds1 %>% arrange(Freq) 
+       # chid = head(ds$Chip_id, 1)
+
+        if (rea$match) {
+
+            ds1 = rea$ds_vna
+            
+            #ds1 <- ds1 %>% arrange(Freq)
             #Fr1 = round(head(ds1$Fr, 1), 3)
-    
-    
+
+
             p <- p %>%
-    
+
             add_trace(data = ds1, x = ~Freq, y = ~S, name = 'VNA S,dB', yaxis = "y2", color = 'orange', type = 'scatter', mode = 'lines+markers') %>%
               layout(yaxis2 = list(title = "VNA S,dB", overlaying = "y", side = "right", automargin = T))    %>%
-    
-    
-    
+
+
+
             add_trace(x = rea$fr_v + 0.01,
                         y = max(ds1$S)+offset,
                         mode = 'text',  text = paste0('', rea$fr_v ),
                         type = 'scatter', showlegend = FALSE, yaxis = "y2",
                         textfont = list(color = 'orange', size = 12)
              )
-    
-    
+
+
             lines = list(  lines,
                            list(type='line', x0 = rea$fr_v, x1 = rea$fr_v, y0=min(ds1$S), y1=max(ds1$S), yref = "y2",
                                 line=list(dash='dot', width=3, color = 'lightpink',  name = 'Fr VNA'))
                         )
-            
+
 
           }
-        }
-    }
+    #     }
+    # }
 
 
     p <- p %>%
