@@ -792,8 +792,8 @@ server <- function(input, output, session) {
 
     p <- plot_ly()    %>%
       add_trace(data = ds, x = xx, y = ~Freq,
-                type = 'scatter', name = 'Freq', mode = 'lines+markers') %>%
-      add_trace(data = ds, x = xx, y = ~Temp, name = 'Temp', yaxis = "y2", type = 'scatter', mode = 'lines+markers') %>%
+                type = 'scatter', name = 'Freq', mode = 'markers') %>%
+      add_trace(data = ds, x = xx, y = ~Temp, name = 'Temp', yaxis = "y2", type = 'scatter', mode = 'markers') %>%
 
 
       layout(yaxis2 = list(title = "Temp", overlaying = "y", side = "right", automargin = T))
@@ -863,8 +863,8 @@ server <- function(input, output, session) {
 
     p <- plot_ly()    %>%
       add_trace(data = ds, x = xx, y = ~Power,
-                type = 'scatter', name = 'Power', mode = 'lines+markers') %>%
-      add_trace(data = ds, x = xx, y = ~Vpp, name = 'Vpp', yaxis = "y2", type = 'scatter', mode = 'lines+markers') %>%
+                type = 'scatter', name = 'Power', mode = 'markers') %>%
+      add_trace(data = ds, x = xx, y = ~Vpp, name = 'Vpp', yaxis = "y2", type = 'scatter', mode = 'markers') %>%
       layout(yaxis2 = list(title = "Vpp", overlaying = "y", side = "right", automargin = T))
 
 
@@ -950,9 +950,9 @@ server <- function(input, output, session) {
 
     p <- plot_ly()    %>%
       add_trace(data = ds, x = ~Freq, y = ~Power,
-                type = 'scatter', name = 'Power', mode = 'lines+markers') %>%
+                type = 'scatter', name = 'Power', mode = 'markers') %>%
 
-    add_trace(x = rea$fr_c - 0.01,
+    add_trace(x = rea$fr_c - 0.02,
               y = max(ds$Power)*1.3,
               mode = 'text',  text = paste0('', rea$fr_c ),
               type = 'scatter', showlegend = F, yaxis = "y",
@@ -977,12 +977,12 @@ server <- function(input, output, session) {
 
             p <- p %>%
 
-            add_trace(data = ds1, x = ~Freq, y = ~S, name = 'VNA S,dB', yaxis = "y2", color = 'orange', type = 'scatter', mode = 'lines+markers') %>%
+            add_trace(data = ds1, x = ~Freq, y = ~S, name = 'VNA S,dB', yaxis = "y2", color = 'orange', type = 'scatter', mode = 'markers') %>%
               layout(yaxis2 = list(title = "VNA S,dB", overlaying = "y", side = "right", automargin = T))    %>%
 
 
 
-            add_trace(x = rea$fr_v + 0.01,
+            add_trace(x = rea$fr_v + 0.02,
                         y = max(ds1$S)+offset,
                         mode = 'text',  text = paste0('', rea$fr_v ),
                         type = 'scatter', showlegend = FALSE, yaxis = "y2",
