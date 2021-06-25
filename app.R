@@ -223,7 +223,7 @@ server <- function(input, output, session) {
 
 
       cols = c("Timestamp",  "Freq", #"Input_Voltage", "Input_Current", 
-               "Power", "Vpp", "Temp",  #"Flood_Param",  "Fluid_State", "Fixed_Current", 
+               "Power", "Power_db", "Vpp", "Temp",  #"Flood_Param",  "Fluid_State", "Fixed_Current", 
                'Parea', "Fr", "Chip_id", "Chip_raw", "Mode", "Header_line", "FileName", "Contr_id" )
 
       withProgress({
@@ -232,7 +232,7 @@ server <- function(input, output, session) {
         out = data.frame()
         contr_files = c()
         
-        id = 1
+        id = 42
 
        # f_list = head(f_list, 10)
         #f_name = f_list[1]
@@ -365,11 +365,18 @@ server <- function(input, output, session) {
 
             tmp$Header_line <- i
             tmp$FileName <- f_name
+            
+            
 
+            
+            # Power in dB
+            tmp$Power = as.numeric(tmp$Power)
+            tmp$Power_db = 20*log10(( 1 - 0.999* min(tmp$Power) / tmp$Power   ))
+            #tmp$Power_db = 20*log10(( tmp$Power / min(tmp$Power)  ))
+            
             
             # area under Power line
             tmp$Timestamp = as.numeric(tmp$Timestamp)
-            tmp$Power = as.numeric(tmp$Power)
             x = tmp$Timestamp
             y = tmp$Power
             sP = sum(diff(x) * (head(y,-1) + tail(y,-1)))/2                
@@ -406,7 +413,6 @@ server <- function(input, output, session) {
         setProgress(message = 'Controller data preparing')
         
         out$Freq = as.numeric(out$Freq)
-       # out$Power10 = out$Power * 10
         out$Vpp = as.numeric(out$Vpp)
         out$Temp = as.numeric(out$Temp)
   
@@ -425,7 +431,7 @@ server <- function(input, output, session) {
         contr_files$Points = as.numeric(as.character(contr_files$Points))
         
 
-        out = out[, c( "Timestamp", "Freq", "Power", "Vpp", "Temp",       
+        out = out[, c( "Timestamp", "Freq", "Power", "Power_db", "Vpp", "Temp",       
                        "Parea", "Fr", "fTcf75", "fTcf90", "Contr_id" )]
         
 
@@ -868,7 +874,7 @@ server <- function(input, output, session) {
     if (nrow(ds) == 0) return()
 
     ds <- ds %>% arrange(Freq)
-
+    ds$Power <- ds$Power_db
 
     offset = 0.75
     mg = 0.005
@@ -878,7 +884,7 @@ server <- function(input, output, session) {
                 type = 'scatter', name = 'Power', mode = 'markers') %>%
 
     add_trace(x = rea$fr_c * (1 - mg),
-              y = max(ds$Power)*1.3,
+              y = 1, #max(ds$Power)*0.8,
               mode = 'text',  text = paste0('', rea$fr_c ),
               type = 'scatter', showlegend = F, yaxis = "y",
               textfont = list(color = 'cadetblue', size = 12)
@@ -920,7 +926,7 @@ server <- function(input, output, session) {
 
 
     p <- p %>%
-      layout(yaxis = list(title = "Power"),  xaxis = list(title = "Freq, MHz"),
+      layout(yaxis = list(title = "Power, dB"),  xaxis = list(title = "Freq, MHz"),
              title = paste('Controller vs VNA data comparison: ', ' Contr_id = ', rea$contr_id, '; Vna_id = ', rea$vna_id),
              legend = list(orientation = "h", xanchor = "center", x = 0.8),
              shapes = lines) %>%
