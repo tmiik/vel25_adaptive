@@ -116,7 +116,16 @@ ui <- fluidPage(
       
       br(), br(),
       pickerInput("chip_input", "Chip ID:",  choices = c(''), 
-                  options = list('actions-box' = TRUE), multiple = FALSE) 
+                  options = list('actions-box' = TRUE), multiple = FALSE),
+      
+      br(), br(),
+      pickerInput("contr_input", "Y axis (Contr.):",  choices = c("Power", "Power_db", "Vpp", "Temp"), 
+                  selected = "Power_db", options = list('actions-box' = TRUE), multiple = FALSE) ,
+      
+      
+      pickerInput("vna_input", "Y axis (VNA):",  choices = c('S', 'Z', 'R', 'X'), 
+                  selected = "S", options = list('actions-box' = TRUE), multiple = FALSE) 
+     
       
       , width = 2
     ),
@@ -223,7 +232,8 @@ server <- function(input, output, session) {
 
 
       cols = c("Timestamp",  "Freq", #"Input_Voltage", "Input_Current", 
-               "Power", "Power_db", "Vpp", "Temp",  #"Flood_Param",  "Fluid_State", "Fixed_Current", 
+               "Power", "Power_db", "Vpp", "Temp",  
+               #"Flood_Param",  "Fluid_State", #"Fixed_Current", 
                'Parea', "Fr", "Chip_id", "Chip_raw", "Mode", "Header_line", "FileName", "Contr_id" )
 
       withProgress({
@@ -431,7 +441,8 @@ server <- function(input, output, session) {
         contr_files$Points = as.numeric(as.character(contr_files$Points))
         
 
-        out = out[, c( "Timestamp", "Freq", "Power", "Power_db", "Vpp", "Temp",       
+        out = out[, c( "Timestamp", "Freq", "Power", "Power_db", "Vpp", "Temp",   
+                       #"Flood_Param",  "Fluid_State", #"Fixed_Current",     
                        "Parea", "Fr", "fTcf75", "fTcf90", "Contr_id" )]
         
 
@@ -677,6 +688,7 @@ server <- function(input, output, session) {
   
   
   
+  
 
   
   
@@ -826,7 +838,7 @@ server <- function(input, output, session) {
 
       tmp = rea$vna_files
       DT::datatable(tmp, rownames = FALSE,  class="compact",
-                    caption = htmltools::tags$caption( style = 'caption-side: top; text-align: left; color:black; font-size:130% ;','Table2: VNA datasets (chips corresponding to controller data only)'),
+                    caption = htmltools::tags$caption( style = 'caption-side: top; text-align: left; color:black; font-size:130% ;','Table2: VNA datasets (VNA chips presented in controller data only)'),
                     selection = list(mode = 'single', selected = 1),
                     options = list(lengthMenu = c(10, 50, 100, 500),  pageLength = 7,  dom = 'Brtip',  deferRender = TRUE,
                                    scroller = TRUE
@@ -866,31 +878,36 @@ server <- function(input, output, session) {
 
   output$plot_freq <- renderPlotly({
 
-
+    ys = input$contr_input
+    ys1 = input$vna_input
+    
     ds = rea$ds_contr
     
-
+    if (is.null(ys) )  return()   
+    if (is.null(ys1) )  return()
     if (is.null(ds) )  return()
     if (nrow(ds) == 0) return()
 
     ds <- ds %>% arrange(Freq)
-    ds$Power <- ds$Power_db
 
-    offset = 0.75
+    yd = ds[[ys]]
+    
+    
+    offset = 1.0
     mg = 0.005
 
     p <- plot_ly()    %>%
-      add_trace(data = ds, x = ~Freq, y = ~Power,
-                type = 'scatter', name = 'Power', mode = 'markers') %>%
+      add_trace(data = ds, x = ~Freq, y = yd,
+                type = 'scatter', name = ys, mode = 'markers') %>%
 
     add_trace(x = rea$fr_c * (1 - mg),
-              y = 1, #max(ds$Power)*0.8,
+              y =  max(yd)+offset, 
               mode = 'text',  text = paste0('', rea$fr_c ),
               type = 'scatter', showlegend = F, yaxis = "y",
               textfont = list(color = 'cadetblue', size = 12)
     )
 
-    lines =  list(type='line', x0 = rea$fr_c, x1 = rea$fr_c, y0=min(ds$Power), y1=max(ds$Power)*1.3, yref = "y",
+    lines =  list(type='line', x0 = rea$fr_c, x1 = rea$fr_c, y0=min(yd), y1=max(yd)*1.1, yref = "y",
                   line=list(dash='dot', width=3, color = 'lightblue',  name = 'Fr Contr'))
 
 
@@ -899,16 +916,17 @@ server <- function(input, output, session) {
 
             ds1 = rea$ds_vna
 
-
+            yd1 = ds1[[ys1]]
+            
             p <- p %>%
 
-            add_trace(data = ds1, x = ~Freq, y = ~S, name = 'VNA S,dB', yaxis = "y2", color = 'orange', type = 'scatter', mode = 'markers') %>%
-              layout(yaxis2 = list(title = "VNA S,dB", overlaying = "y", side = "right", automargin = T))    %>%
+            add_trace(data = ds1, x = ~Freq, y = yd1, name = ys1, yaxis = "y2", color = 'orange', type = 'scatter', mode = 'markers') %>%
+              layout(yaxis2 = list(title = ys1, overlaying = "y", side = "right", automargin = T))    %>%
 
 
 
             add_trace(x = rea$fr_v * (1 + mg),
-                        y = max(ds1$S)+offset,
+                        y = max(yd1)+offset,
                         mode = 'text',  text = paste0('', rea$fr_v ),
                         type = 'scatter', showlegend = FALSE, yaxis = "y2",
                         textfont = list(color = 'orange', size = 12)
@@ -916,7 +934,7 @@ server <- function(input, output, session) {
 
 
             lines = list(  lines,
-                           list(type='line', x0 = rea$fr_v, x1 = rea$fr_v, y0=min(ds1$S), y1=max(ds1$S), yref = "y2",
+                           list(type='line', x0 = rea$fr_v, x1 = rea$fr_v, y0=min(yd1), y1=max(yd1), yref = "y2",
                                 line=list(dash='dot', width=3, color = 'lightpink',  name = 'Fr VNA'))
                         )
 
@@ -926,7 +944,7 @@ server <- function(input, output, session) {
 
 
     p <- p %>%
-      layout(yaxis = list(title = "Power, dB"),  xaxis = list(title = "Freq, MHz"),
+      layout(yaxis = list(title = ys),  xaxis = list(title = "Freq, MHz"),
              title = paste('Controller vs VNA data comparison: ', ' Contr_id = ', rea$contr_id, '; Vna_id = ', rea$vna_id),
              legend = list(orientation = "h", xanchor = "center", x = 0.8),
              shapes = lines) %>%
