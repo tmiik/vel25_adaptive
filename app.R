@@ -640,7 +640,7 @@ server <- function(input, output, session) {
     rea$contr_files <- contr_files
     rea$vna_files <- vna_files
     
-    x <- sort(as.vector(unique(res$vna_files$Chip_id)))
+    x <- sort(as.vector(unique(res$contr_files$Chip_id)))
     x = choices = c('All', x)
     updatePickerInput(session, "chip_input",  choices = x   )
     
